@@ -716,6 +716,7 @@ blblblbllblblbllblblblbllblblbllblblblbllblblbllblblblbllblblbll
 blblblbllblblbllblblblbllblblbllblblblbllblblbllblblblbllblblbll
 
 ## Use Case 1: The Basic Beacon (Script-Kiddie)
+
 In this scenario, we simulate a common entry-level malware infection. The attacker delivers a standalone executable (`WindowsUpdate.exe`) that, once executed, ensures its survival across system reboots and establishes a persistent communication channel with a Command and Control (C2) server to exfiltrate basic host information.
 
 ### Log Analysis
