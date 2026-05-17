@@ -27,39 +27,16 @@ This documentation provides detailed guidance step by step through building your
 
 - [Introduction](#introduction)
   - [Table of Contents](#table-of-contents)
-
 - [Project Overview](#project-overview)
-  - [What is Red2Blue?](#what-is-red2blue)
-  - [What You Will Learn](#what-you-will-learn)
-  - [Lab Architecture](#lab-architecture)
-  - [Lab Requirements](#lab-requirements)
-
 - [Infrastructure](#infrastructure)
   - [Infrastructure Diagram (Architecture Schema)](#infrastructure-diagram-architecture-schema)
   - [SIEM Server (Windows 10 Host)](#siem-server-windows-10-host)
-    - [Splunk Enterprise Setup & Installation](#splunk-enterprise-setup--installation)
-    - [Initial Splunk Configuration](#initial-splunk-configuration)
-    - [Add-ons & Apps Configuration](#add-ons--apps-configuration)
   - [Endpoint (Windows 10 VM)](#endpoint-windows-10-vm)
-    - [Setting Up Windows 10 on VMware](#setting-up-windows-10-on-vmware)
-    - [Sysmon Installation & Configuration](#sysmon-installation--configuration)
-    - [Splunk Universal Forwarder Setup & Installation](#splunk-universal-forwarder-setup--installation)
-    - [Splunk Universal Forwarder Configuration](#splunk-universal-forwarder-configuration)
-  - [Testing & Log Verification](#testing--log-verification) <----
-
+  - [Testing & Log Verification](#testing--log-verification)
 - [Use Cases](#Use-Cases)
   - [Use Case 1: The Basic Beacon (Script-Kiddie)](#Use-Case-1:-The-Basic-Beacon-(Script-Kiddie))
-    - [Overview](#overview)
-    - [Attack Flow](#attack-flow)
-    - [MITRE ATT&CK Mapping](#mitre-attck-mapping)
-    - [Environment & Malware Setup](#Environment-&-Malware-Setup)
-      - [Malware Source Code (C++)](#Malware-Source-Code-(C++))
-      - [Set Up the C2 Server on Kali Linux (Python)](#Set-Up-the-C2-Server-on-Kali-Linux-(Python))
-
+  - [Use Case 2: Phishing via Malicious Word Attachment](###Use-Case-2:-Phishing-via-Malicious-Word-Attachment)
 - [Detection & Analysis](#detection--analysis)
-  - [Context Concepts](#context-concepts)
-  - [Alerts and Detection](#alerts-and-detection)
-  - [Use Case 1: The Basic Beacon (Script-Kiddie)](#The-Basic-Beacon-(Script-Kiddie))
   - [Use Case 2: Phishing via Malicious Word Attachment](###Use-Case-2:-Phishing-via-Malicious-Word-Attachment)
 
 # Project Overview
