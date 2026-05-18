@@ -35,7 +35,7 @@ This documentation provides detailed guidance step by step through building your
   - [Testing & Log Verification](#testing--log-verification)
 - [Use Cases](#Use-Cases)
   - [Use Case 1: The Basic Beacon (Script-Kiddie)](#use-case-1-the-basic-beacon-script-kiddie)
-  - [Use Case 2: Phishing via Malicious Word Attachment (Basic)](#use-case-2-phishing-via-malicious-word-attachment-basic)
+  - [Use Case 2: Phishing via Malicious Word Attachment (Basic)](#Use-Case-2-Phishing-via-Malicious-Word-Attachment)
   - [Use Case 3: Clipboard to Compromise: PowerShell Script Self-Pwn](#use-case-3-clipboard-to-compromise-powershell-script-self-pwn)
   - [Use Case 4: Download malware via web browser leads to C2](#use-case-4-download-malware-via-web-browser-leads-to-c2)
   - [Use Case 5: Phishing via Malicious Word Attachment (advanced: memory execute)](#use-case-5-phishing-via-malicious-word-attachment-advanced-memory-execute)
