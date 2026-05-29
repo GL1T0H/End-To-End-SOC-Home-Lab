@@ -34,7 +34,7 @@ This documentation provides detailed guidance step by step through building your
   - [Use Case 1: The Basic Beacon (Script-Kiddie)](#use-case-1-the-basic-beacon-script-kiddie)
   - [Use Case 2: Phishing via Malicious Word Attachment (Basic)](#Use-Case-2-Phishing-via-Malicious-Word-Attachment)
   - [Use Case 3: Hunting for LSASS Memory Access (Credential Dumping)](#use-case-3-Hunting-for-LSASS-Memory-Access-Credential-Dumping)
-  - [Use Case 4: Hunting for Indicator Removal — Catching the Cover-Up](#Use-Case-4-Hunting-for-Indicator-Removal-Catching-the-Cover-Up)
+  - [Use Case 4: Hunting for Indicator Removal (Catching the Cover Up)](#Use-Case-4-Hunting-for-Indicator-Removal-Catching-the-Cover-Up)
 
 # Project Overview
 
@@ -1847,7 +1847,7 @@ OR (TargetFilename="*.dmp")
 
 ---
 
-# Use Case 4: Hunting for Indicator Removal — Catching the Cover-Up
+# Use Case 4: Hunting for Indicator Removal (Catching the Cover Up)
 
 ### Hypothesis
 
