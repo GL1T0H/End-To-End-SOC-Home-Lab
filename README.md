@@ -14,11 +14,9 @@
   <a href="https://g1it0h.gitbook.io/glitch">Blog</a>
 </p>
 
-<h6 align="center">This project is currently under active development 🚧</h6>
+<h6 align="center">This blog is still a work in progress. Whenever I come across a technique or a specific activity that's worth documenting — whether it's something I stumbled upon in a threat report, a CTF, or just down a rabbit hole at 2am — I'll come back here, break it down, and build a detection for it. The goal isn't to cover everything, it's to keep learning and make sure every technique I write about is something I actually understood, tested, and hunted for myself.</h6>
 
 ---
-
-
 
 # Introduction
 This documentation provides detailed guidance step by step through building your SOC lab from scratch — from setting up the infra, to designing and running attack scenarios, and finally learning how to detect and analyze them using Splunk and more.
@@ -26,7 +24,6 @@ This documentation provides detailed guidance step by step through building your
 ## Table of Contents
 
 - [Introduction](#introduction)
-  - [Table of Contents](#table-of-contents)
 - [Project Overview](#project-overview)
 - [Infrastructure](#infrastructure)
   - [Infrastructure Diagram (Architecture Schema)](#infrastructure-diagram-architecture-schema)
@@ -37,14 +34,12 @@ This documentation provides detailed guidance step by step through building your
   - [Use Case 1: The Basic Beacon (Script-Kiddie)](#use-case-1-the-basic-beacon-script-kiddie)
   - [Use Case 2: Phishing via Malicious Word Attachment (Basic)](#Use-Case-2-Phishing-via-Malicious-Word-Attachment)
   - [Use Case 3: Hunting for LSASS Memory Access (Credential Dumping)](#use-case-3-Hunting-for-LSASS-Memory-Access-Credential-Dumping)
-  - [Use Case 4: Download malware via web browser leads to C2](#use-case-4-download-malware-via-web-browser-leads-to-c2)
-  - [Use Case 5: Phishing via Malicious Word Attachment (advanced: memory execute)](#use-case-5-phishing-via-malicious-word-attachment-advanced-memory-execute)
-- [Detection & Analysis](#detection--analysis)
+  - [Use Case 4: Hunting for Indicator Removal — Catching the Cover-Up](#Use-Case-4-Hunting-for-Indicator-Removal-Catching-the-Cover-Up)
 
 # Project Overview
 
-## What is Red2Blue?
-**Red2Blue** is a hands-on home SOC lab designed to demonstrate how common attack techniques generate logs and telemetry, and how defenders can detect, investigate, and respond to these attacks using **Splunk**.
+## What is It?
+is a hands-on home SOC lab designed to demonstrate how common attack techniques generate logs and telemetry, and how defenders can detect, investigate, and respond to these attacks using **Splunk**.
 
 This project bridges the gap between **Red Team attack simulation** and **Blue Team detection engineering**, focusing on attacker behavior rather than tools.
 
@@ -407,6 +402,7 @@ index = windows_application
 disabled = false
 index = sysmon
 sourcetype = XmlWinEventLog:Microsoft-Windows-Sysmon/Operational
+renderXml = false
 ```
 
 <img width="1154" height="548" alt="Screenshot_45" src="https://github.com/user-attachments/assets/b01f542e-8b11-4033-8382-2d9c7d3c1da3" />
@@ -686,7 +682,7 @@ That When The Malware Executed
 
 ---
 
-# Detection & Analysis
+## Hunting
 
 ## Use Case 1: The Basic Beacon (Script-Kiddie)
 
@@ -1103,7 +1099,7 @@ This Python script acts as a **simple HTTP listener**:
 
 ---
 
-## Detection & Analysis
+## Hunting
 
 It was just another boring Tuesday… nothing special, until suddenly an alert popped up saying that the machine **DESKTOP-MOPLS2N** might be compromised, and you’re required to investigate, build a timeline, and deliver a report.
 
@@ -1605,7 +1601,7 @@ The main difference here is the data being exfiltrated:
 
 ---
 
-## Detection & Analysis
+## Hunting
 
 ### LSASS Dumping (Quick Intro before we dive in)
 
@@ -1851,5 +1847,381 @@ OR (TargetFilename="*.dmp")
 
 ---
 
+# Use Case 4: Hunting for Indicator Removal — Catching the Cover-Up
 
+### Hypothesis
+
+> *"Threat actors commonly attempt to clear Windows Event Logs after completing their objectives to hinder forensic analysis. We'll hunt for this behavior by identifying the artifacts that the clearing action itself leaves behind — artifacts the attacker cannot remove."*
+> 
+
+**MITRE:** T1070.001 — Indicator Removal: Clear Windows Event Logs
+
+---
+
+## Indicator Removal: Clear Windows Event Logs — T1070.001
+
+So let's talk about one of my favorite techniques to hunt for, not because it's the most complex, but because of the irony behind it. The attacker tries to cover their tracks by wiping the logs... and that action itself leaves a log entry they can't delete. Beautiful, right?
+
+---
+
+## What's the Technique?
+
+After an attacker finishes their objectives — whether it's dumping credentials, moving laterally, or dropping ransomware — they want to clean up. One of the most common cleanup steps is clearing Windows Event Logs to make the SOC analyst's life harder during incident response.
+
+The goal is simple: **no logs = no evidence.**
+
+But Windows had other plans.
+
+---
+
+## How Can It Happen? (Methods)
+
+### Method 1: wevtutil
+
+This is the most common way you'll see it in the wild. `wevtutil` is a built-in Windows tool for managing event logs — totally legitimate, which is exactly why attackers love it.
+
+```bash
+wevtutil cl System
+wevtutil cl Security
+wevtutil cl Application
+```
+
+You'll also see it sometimes as a one-liner in scripts:
+
+```bash
+for /F "tokens=*" %1 in ('wevtutil.exe el') do wevtutil.exe cl "%1"
+```
+
+That last one clears **every single log** on the machine in a loop. That's the aggressive version.
+
+**Sigma Rule:**
+
+```yaml
+title: Event Log Cleared via wevtutil
+status: stable
+logsource:
+    category: process_creation
+    product: windows
+detection:
+    selection:
+        Image|endswith: '\wevtutil.exe'
+        CommandLine|contains:
+            - ' cl '
+            - ' clear-log '
+    condition: selection
+falsepositives:
+    - Legitimate admin log maintenance
+level: high
+tags:
+    - attack.defense_evasion
+    - attack.t1070.001
+```
+
+> These are the logs that will appear when you clear a specific source log.
+<img width="931" height="559" alt="Screenshot_2" src="https://github.com/user-attachments/assets/2a15cd78-3c82-4730-b865-db8ecb877aae" />
+
+> Right after that, you'll find in the System log that an **EventCode=104** has been recorded, indicating that the Application source log was cleared.
+<img width="552" height="551" alt="Screenshot_3" src="https://github.com/user-attachments/assets/7de9afff-7901-46f2-950e-51e47c45dc38" />
+
+---
+
+### Method 2: PowerShell (The Stealthier One)
+
+Some attackers prefer to do it through PowerShell because it can be obfuscated more easily and doesn't always trigger the same signatures as wevtutil.
+
+```powershell
+Get-EventLog -LogName * | ForEach-Object { Clear-EventLog $_.Log }
+```
+
+Or the more modern version:
+
+```powershell
+[System.Diagnostics.Eventing.Reader.EventLogSession]::GlobalSession.ClearLog("Security")
+```
+
+**Sigma Rule:**
+
+```yaml
+title: Event Log Cleared via PowerShell
+status: stable
+logsource:
+    category: process_creation
+    product: windows
+detection:
+    selection:
+        Image|endswith: '\powershell.exe'
+        CommandLine|contains:
+            - 'Clear-EventLog'
+            - 'ClearLog'
+    condition: selection
+falsepositives:
+    - Admin scripts during maintenance windows
+level: high
+tags:
+    - attack.defense_evasion
+    - attack.t1070.001
+```
+
+> And the same with Powershell:  `Get-EventLog -LogName * | ForEach-Object { Clear-EventLog $_.Log }`
+<img width="939" height="554" alt="Screenshot_4" src="https://github.com/user-attachments/assets/298f7a9a-1ffb-4f85-b631-03bc891717d0" />
+
+---
+
+### Method 3: The Smoking Gun — EID 1102 & 104
+
+Here's the part I love. No matter which method the attacker uses, Windows generates two events that **survive the clearing:**
+
+- **Security EID 1102** — "The audit log was cleared"
+- **System EID 104** — "The event log was cleared"
+
+These get written *after* the clear action completes, meaning they're born into an already-wiped log. The attacker would have to clear the logs a second time to remove them — and that would just generate them again. It's a trap they can't escape.
+
+**Sigma Rule:**
+
+```yaml
+title: Windows Event Log Cleared — Smoking Gun
+status: stable
+logsource:
+    product: windows
+    service: security
+detection:
+    selection:
+        EventID:
+            - 1102
+            - 104
+    condition: selection
+falsepositives:
+    - Legitimate log rotation by IT admins
+level: high
+tags:
+    - attack.defense_evasion
+    - attack.t1070.001
+```
+<img width="1092" height="555" alt="Screenshot_5" src="https://github.com/user-attachments/assets/b7246f03-7c53-478a-9cab-935fa864e8ab" />
+
+---
+
+### Method 4: Via a Script or Malware (Automated Cleanup)
+
+In real ransomware incidents, log clearing isn't manual — it's baked into the malware itself as a cleanup routine that runs automatically. You'll see it as a child process of something unexpected, like:
+
+```
+malware.exe → cmd.exe → wevtutil.exe cl Security
+```
+
+That parent-child relationship is a huge red flag.
+
+**Sigma Rule:**
+
+```yaml
+title: Suspicious Parent Spawning wevtutil for Log Clearing
+status: experimental
+logsource:
+    category: process_creation
+    product: windows
+detection:
+    selection:
+        Image|endswith: '\wevtutil.exe'
+        CommandLine|contains:
+            - ' cl '
+            - ' clear-log '
+        ParentImage|endswith:
+            - '\cmd.exe'
+            - '\powershell.exe'
+    filter_legit:
+        ParentImage|contains:
+            - '\Windows\System32\'
+    condition: selection and not filter_legit
+falsepositives:
+    - Admin batch scripts
+level: critical
+tags:
+    - attack.defense_evasion
+    - attack.t1070.001
+```
+
+---
+
+### Method 5: **Audit Policy Tampering — T1562.002**
+
+**Audit Policy Tampering.** This one is sneaky because the whole point is to make Windows *stop recording evidence* before the attacker does anything noisy.
+
+## What Is It?
+
+Windows has a built-in system called **Audit Policy** that controls what gets logged in the Security Event Log. Things like logons, process creation, file access — all of that is governed by this policy.
+
+An attacker who knows what they're doing will tamper with this policy *before* doing anything malicious. That way, their actions generate no logs at all. It's not about cleaning up after yourself — it's about making sure there's nothing to clean up in the first place.
+
+
+### Method 1: auditpol.exe (The Direct Approach)
+
+`auditpol` is a legitimate built-in Windows tool for managing audit policies. Attackers abuse it to disable logging entirely:
+
+```bash
+auditpol /set /category:* /success:disable /failure:disable
+```
+
+Or targeting specific categories to be more surgical:
+
+```bash
+auditpol /set /subcategory:"Logon" /success:disable
+auditpol /set /subcategory:"Process Creation" /success:disable
+```
+
+**Sigma Rule:**
+
+```yaml
+title: Audit Policy Disabled via auditpol
+status: stable
+logsource:
+    category: process_creation
+    product: windows
+detection:
+    selection:
+        Image|endswith: '\auditpol.exe'
+        CommandLine|contains:
+            - 'disable'
+            - '/set'
+    condition: selection
+falsepositives:
+    - Legitimate GPO-based audit policy changes
+level: high
+tags:
+    - attack.defense_evasion
+    - attack.t1562.002
+```
+
+---
+
+### Method 2: Group Policy / Registry Modification
+
+More advanced attackers modify the audit policy through the registry directly, which can be quieter than running auditpol:
+
+```bash
+reg add "HKLM\SYSTEM\CurrentControlSet\Control\Lsa" /v "AuditBaseObjects" /t REG_DWORD /d 0 /f
+```
+
+This approach is less common but harder to detect if you're only watching for auditpol.exe execution.
+
+**Sigma Rule:**
+
+```yaml
+title: Audit Policy Registry Tampering
+status: experimental
+logsource:
+    category: registry_set
+    product: windows
+detection:
+    selection:
+        TargetObject|contains:
+            - '\Control\Lsa'
+            - '\CurrentControlSet\Services\EventLog'
+        Details:
+            - 'DWORD (0x00000000)'
+    condition: selection
+falsepositives:
+    - Legitimate system hardening scripts
+level: medium
+tags:
+    - attack.defense_evasion
+    - attack.t1562.002
+```
+
+---
+
+### Method 3: PowerShell (Wrapped Execution)
+
+Sometimes it's done through PowerShell just to add an extra layer and potentially bypass script monitoring:
+
+```powershell
+& auditpol.exe /set /category:* /success:disable /failure:disable
+```
+
+Or using WMI to make it even less obvious:
+
+```powershell
+$result = Invoke-Expression "auditpol /set /category:* /success:disable"
+```
+
+**Sigma Rule:**
+
+```yaml
+title: Audit Policy Tampered via PowerShell
+status: experimental
+logsource:
+    category: process_creation
+    product: windows
+detection:
+    selection_parent:
+        ParentImage|endswith: '\powershell.exe'
+        Image|endswith: '\auditpol.exe'
+    condition: selection_parent
+falsepositives:
+    - Admin automation scripts
+level: high
+tags:
+    - attack.defense_evasion
+    - attack.t1562.002
+```
+
+---
+
+## How Do You Catch It?
+
+### The Direct Evidence — EID 4719
+
+This is your best friend here. Every time the Audit Policy changes, Windows logs **Security EID 4719 — "System audit policy was changed."**
+
+The beautiful irony? This event gets written *before* the auditing is disabled — so it betrays the attacker's action right as it happens.
+
+```
+index=wineventlog EventCode=4719
+| table _time, Computer, User, Message
+| sort -_time
+```
+
+### Sysmon EID 1 — Process Execution
+
+Even if the Security log gets cleared afterward, Sysmon would have already captured the auditpol execution:
+
+```
+index=sysmon EventCode=1 Image="*auditpol.exe"
+| where match(CommandLine, "(?i)(disable|/set)")
+| table _time, Computer, User, CommandLine, ParentImage
+```
+
+### The Silence Indicator
+
+If auditing gets disabled and somehow EID 4719 was missed, there's still a behavioral indicator — **the log goes unusually quiet.** A healthy Windows system generates Security events constantly. A sudden gap with no events is itself suspicious and worth investigating.
+
+---
+
+## The Full Attack Chain — When Combined with T1070.001
+
+This is where it gets really interesting for your scenario. When you see these two techniques together, it tells a very clear story:
+
+```
+EID 4719 → Audit Policy disabled     (T1562.002)
+         ↓
+    [silence — no events generated]
+         ↓
+EID 1102 → Security log cleared      (T1070.001)
+EID 104  → System log cleared
+         ↓
+    [attacker thinks they're clean]
+         ↓
+    EID 4719 + 1102 still exist      ← can't escape this
+```
+
+**Correlation Query:**
+
+```
+index=wineventlog (EventCode=4719 OR EventCode=1102 OR EventCode=104)
+| append
+    [search index=sysmon EventCode=1 Image="*auditpol.exe"]
+| sort _time
+| table _time, EventCode, Computer, User, CommandLine, Message
+```
+
+---
 
